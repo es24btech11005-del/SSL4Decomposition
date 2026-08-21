@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Downloaded Allen Cell data is large and can be regenerated with the script.
+downloads/
+metadata.csv
+
+# Keep small, curated PNG examples in source control, but ignore other previews.
+previews/*
+!previews/.gitkeep
+!previews/*.png
