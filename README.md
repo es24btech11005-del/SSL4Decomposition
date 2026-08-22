@@ -14,13 +14,25 @@ If you use the supplied conda environment, replace `python` with its Python exec
 
 ## Download images
 
-The downloader is a function, so it must be called with arguments. This example downloads five raw stacks and five segmentation masks for TOMM20:
+Run the downloader from the project root to download five raw stacks and five segmentation masks for every structure in the dataset:
 
 ```powershell
-python -c "from ProofOfConcept.download_images import download_structures; download_structures('TOMM20', 5, 'downloads')"
+python ProofOfConcept/download_images.py
 ```
 
-The files are written to `downloads/`. To download another structure, replace `TOMM20` with a label from the dataset, such as `ACTB`, `ACTN1`, `ATP2A2`, `CETN2`, `DSP`, `FBL`, `LAMP1`, `LMNB1`, `MYH10`, `NPM1`, `NUP153`, `SEC61B`, `ST6GAL1`, `TJP1`, or `TUBA1B`.
+The first run downloads `metadata.csv` into `ProofOfConcept/`. Later runs reuse that local copy. The image files are written to `downloads/`.
+
+For a smaller or targeted download, use optional arguments. This downloads five pairs for TOMM20 and ACTB:
+
+```powershell
+python ProofOfConcept/download_images.py --structure TOMM20 ACTB
+```
+
+To change the number of pairs or output directory:
+
+```powershell
+python ProofOfConcept/download_images.py --num-stacks 2 --output-dir downloads-small
+```
 
 The first Quilt3 call may take several minutes because it loads the Allen Cell package manifest. The image files can also be several megabytes each, so allow the download to finish before closing the terminal.
 
@@ -34,6 +46,14 @@ python ProofOfConcept/preview_tiff.py downloads/<file-name>.ome.tif previews/exa
 
 The preview is the middle Z-slice, contrast-normalized for viewing. It is only a 2D representation; the original TIFF remains the complete 3D dataset.
 
+To create two image previews and two corresponding segmentation-mask previews for every structure, run:
+
+```powershell
+python ProofOfConcept/visualize_structures.py
+```
+
+The script reads `metadata.csv`, selects the first two downloaded pairs for each structure, and saves the middle slices in `visualizations/` as `<structure>_image_1.png`, `<structure>_mask_1.png`, `<structure>_image_2.png`, and `<structure>_mask_2.png`.
+
 Example previews generated from the local downloads:
 
 ![Raw image middle Z-slice](previews/raw_example_1.png)
@@ -44,7 +64,9 @@ Example previews generated from the local downloads:
 
 - `ProofOfConcept/download_images.py`: downloads raw and segmentation stacks.
 - `ProofOfConcept/preview_tiff.py`: converts a representative TIFF slice to PNG.
+- `ProofOfConcept/visualize_structures.py`: creates previews for two pairs per structure.
 - `previews/`: small example images suitable for viewing on GitHub.
+- `visualizations/`: generated previews for all structures.
 - `downloads/`: local downloaded data; ignored by Git because the files are large.
 
 .ome.tif
