@@ -1,5 +1,0 @@
-pandas
-quilt3
-tifffile
-Pillow
-numpy

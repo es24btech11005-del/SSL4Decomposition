@@ -58,8 +58,7 @@ def download_structures(
 
     package = package or q3.Package.browse(PACKAGE_NAME, registry=REGISTRY)
     metadata = metadata if metadata is not None else load_metadata(package)
-
-    structure_column = "structure" if "structure" in metadata.columns else "structure_name"
+    structure_column = "structure_name"
     required_columns = {structure_column, "crop_raw", "crop_seg"}
     missing_columns = required_columns.difference(metadata.columns)
     if missing_columns:
@@ -70,8 +69,9 @@ def download_structures(
     for row in selected.itertuples(index=False):
         raw_path = Path(row.crop_raw)
         seg_path = Path(row.crop_seg)
-        package[str(row.crop_raw)].fetch(str(destination / raw_path.name))
-        package[str(row.crop_seg)].fetch(str(destination / seg_path.name))
+        
+        package[str(row.crop_raw)].fetch(str(destination / row.structure_name / raw_path.name))
+        package[str(row.crop_seg)].fetch(str(destination / row.structure_name / seg_path.name))
 
 
 if __name__ == "__main__":
