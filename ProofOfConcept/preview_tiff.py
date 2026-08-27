@@ -7,20 +7,35 @@ import tifffile
 from PIL import Image
 
 
-def tiff_to_png(input_path: str, output_path: str) -> None:
-    """Save the middle Z-slice of a TIFF stack as an 8-bit grayscale PNG."""
+def tiff_to_png(
+    input_path: str,
+    output_path: str,
+    channel_index: int = 0,
+) -> None:
+    """Save the middle Z-slice of a selected TIFF channel as a PNG."""
     with tifffile.TiffFile(input_path) as tif:
         series = tif.series[0]
-        if len(series.shape) < 2 or not series.axes.endswith("YX"):
+        axes = series.axes
+        if len(series.shape) < 2 or not axes.endswith("YX"):
             raise ValueError(f"Unsupported TIFF dimensions: {series.shape} ({series.axes})")
-        z_axis = series.axes.find("Z")
-        if z_axis == -1:
-            image = series.pages[0].asarray()
-        else:
-            z_count = series.shape[z_axis]
-            pages_per_z = len(series.pages) // z_count
-            middle_z = z_count // 2
-            image = series.pages[middle_z * pages_per_z].asarray()
+
+        image = series.asarray()
+        if "C" in axes:
+            if not 0 <= channel_index < series.shape[axes.index("C")]:
+                raise IndexError(f"Channel index {channel_index} is out of range for {series.shape}")
+            channel_axis = axes.index("C")
+            image = np.take(image, channel_index, axis=channel_axis)
+            axes = axes.replace("C", "")
+        elif channel_index != 0:
+            raise ValueError(f"TIFF has no channel axis: {series.shape} ({series.axes})")
+
+        if "Z" in axes:
+            z_axis = axes.index("Z")
+            middle_z = image.shape[z_axis] // 2
+            image = np.take(image, middle_z, axis=z_axis)
+
+        if image.ndim != 2:
+            raise ValueError(f"Expected a 2D image after selection, got {image.shape} ({axes})")
 
     image = image.astype(np.float32)
     low, high = np.percentile(image, (1, 99))

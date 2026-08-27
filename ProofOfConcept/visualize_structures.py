@@ -1,6 +1,7 @@
 """Create middle-slice image and segmentation previews for each structure."""
 
 import argparse
+import ast
 from pathlib import Path
 
 import pandas as pd
@@ -28,7 +29,7 @@ def visualize_structures(
 
     metadata = pd.read_csv(metadata_path)
     structure_column = "structure" if "structure" in metadata.columns else "structure_name"
-    required_columns = {structure_column, "crop_raw", "crop_seg"}
+    required_columns = {structure_column, "crop_raw", "crop_seg", "name_dict"}
     missing_columns = required_columns.difference(metadata.columns)
     if missing_columns:
         missing = ", ".join(sorted(missing_columns))
@@ -53,8 +54,34 @@ def visualize_structures(
             if not raw_path.exists() or not mask_path.exists():
                 continue
 
-            tiff_to_png(str(raw_path), str(output_dir / f"{structure_name}_image_{index}.png"))
-            tiff_to_png(str(mask_path), str(output_dir / f"{structure_name}_mask_{index}.png"))
+            channel_metadata = ast.literal_eval(row.name_dict)
+            channel_names = channel_metadata["crop_raw"]
+            try:
+                structure_channel = channel_names.index("structure")
+            except ValueError as error:
+                raise ValueError(
+                    f"No 'structure' channel found in name_dict for {row.crop_raw}"
+                ) from error
+
+            try:
+                structure_mask_channel = channel_metadata["crop_seg"].index(
+                    "struct_segmentation"
+                )
+            except ValueError as error:
+                raise ValueError(
+                    f"No 'struct_segmentation' channel found in name_dict for {row.crop_seg}"
+                ) from error
+
+            tiff_to_png(
+                str(raw_path),
+                str(output_dir / f"{structure_name}_image_{index}.png"),
+                channel_index=structure_channel,
+            )
+            tiff_to_png(
+                str(mask_path),
+                str(output_dir / f"{structure_name}_mask_{index}.png"),
+                channel_index=structure_mask_channel,
+            )
 
     if missing_files:
         missing = "\n".join(f"- {path}" for path in missing_files)
