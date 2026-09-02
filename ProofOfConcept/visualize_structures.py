@@ -2,6 +2,7 @@
 
 import argparse
 import ast
+import random
 from pathlib import Path
 
 import pandas as pd
@@ -13,8 +14,138 @@ except ModuleNotFoundError:
 
 
 METADATA_PATH = Path(__file__).with_name("metadata.csv")
-DEFAULT_INPUT_DIR = Path(__file__).parent.parent / "downloads"
+DEFAULT_INPUT_DIR = Path(__file__).parent / "structure_downloads"
 DEFAULT_OUTPUT_DIR = Path(__file__).parent.parent / "visualizations"
+
+
+def get_structure_column(metadata: pd.DataFrame) -> str:
+    """Return the metadata column used for structure names."""
+    return "structure" if "structure" in metadata.columns else "structure_name"
+
+
+def select_structure_rows(
+    metadata: pd.DataFrame,
+    structure_name: str,
+    num_files: int = 3,
+    random_seed: int | None = None,
+) -> pd.DataFrame:
+    """Return a random subset of TIFF rows for a single structure."""
+    if num_files < 1:
+        raise ValueError("num_files must be at least 1")
+
+    structure_column = get_structure_column(metadata)
+    rows = metadata.loc[metadata[structure_column].astype(str) == str(structure_name)].copy()
+    if rows.empty:
+        raise ValueError(f"No metadata rows found for structure: {structure_name}")
+
+    if len(rows) <= num_files:
+        return rows.reset_index(drop=True)
+
+    rng = random.Random(random_seed)
+    sample_seed = rng.randint(0, 2**31 - 1)
+    return rows.sample(n=num_files, random_state=sample_seed).reset_index(drop=True)
+
+
+def visualize_structure_samples(
+    structure_name: str,
+    metadata: pd.DataFrame,
+    input_dir: Path,
+    output_dir: Path,
+    num_files: int = 3,
+    random_seed: int | None = None,
+    z_offsets: list[int] | None = None,
+) -> list[tuple[Path, Path, int]]:
+    """Save a random set of raw and mask previews for one structure."""
+    structure_column = get_structure_column(metadata)
+    source_dir = input_dir / str(structure_name)
+    if not source_dir.exists():
+        raise FileNotFoundError(f"No downloaded TIFFs were found for {structure_name} in {source_dir}")
+
+    available_rows = metadata.loc[
+        metadata[structure_column].astype(str) == str(structure_name)
+    ].copy()
+    available_rows = available_rows[
+        available_rows.apply(
+            lambda row: (
+                (source_dir / Path(row.crop_raw).name).exists()
+                and (source_dir / Path(row.crop_seg).name).exists()
+            ),
+            axis=1,
+        )
+    ].reset_index(drop=True)
+
+    if available_rows.empty:
+        raise FileNotFoundError(
+            f"No downloaded TIFFs for {structure_name} were found in {source_dir}. "
+            "Run the download cell first."
+        )
+
+    if len(available_rows) <= num_files:
+        selected = available_rows.reset_index(drop=True)
+    else:
+        rng = random.Random(random_seed)
+        sample_seed = rng.randint(0, 2**31 - 1)
+        selected = available_rows.sample(n=num_files, random_state=sample_seed).reset_index(drop=True)
+
+    output_dir = output_dir / str(structure_name)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    saved: list[tuple[Path, Path, int]] = []
+    offsets = z_offsets or [-1, 0, 1]
+    rng = random.Random(random_seed)
+
+    for index, row in enumerate(selected.itertuples(index=False), start=1):
+        raw_path = source_dir / Path(row.crop_raw).name
+        mask_path = source_dir / Path(row.crop_seg).name
+        if not raw_path.exists() or not mask_path.exists():
+            raise FileNotFoundError(
+                f"Missing TIFFs for {structure_name} in {source_dir}: "
+                f"{raw_path.name} / {mask_path.name}"
+            )
+
+        channel_metadata = ast.literal_eval(row.name_dict)
+        channel_names = channel_metadata["crop_raw"]
+        mask_channel_names = channel_metadata["crop_seg"]
+        try:
+            structure_channel = channel_names.index("structure")
+            structure_mask_channel = mask_channel_names.index("struct_segmentation")
+        except ValueError as error:
+            raise ValueError(
+                f"The metadata for {structure_name} is missing the required structure channels."
+            ) from error
+
+        z_offset = offsets[(index - 1) % len(offsets)] if z_offsets else rng.choice(offsets)
+        raw_output = output_dir / f"{structure_name}_raw_{index}_z{z_offset}.png"
+        mask_output = output_dir / f"{structure_name}_mask_{index}_z{z_offset}.png"
+
+        try:
+            tiff_to_png(
+                str(raw_path),
+                str(raw_output),
+                channel_index=structure_channel,
+                z_offset=z_offset,
+            )
+            tiff_to_png(
+                str(mask_path),
+                str(mask_output),
+                channel_index=structure_mask_channel,
+                z_offset=z_offset,
+            )
+        except Exception as exc:
+            print(
+                f"Skipping malformed TIFF row for {structure_name} ({raw_path.name} / {mask_path.name}): {exc}"
+            )
+            continue
+
+        saved.append((raw_output, mask_output, z_offset))
+
+    if not saved:
+        raise RuntimeError(
+            f"No valid TIFF previews were generated for {structure_name}. "
+            "The downloaded stacks may be malformed or incompatible with the selected z-slices."
+        )
+
+    return saved
 
 
 def visualize_structures(
@@ -28,7 +159,7 @@ def visualize_structures(
         raise ValueError("files_per_structure must be at least 1")
 
     metadata = pd.read_csv(metadata_path)
-    structure_column = "structure" if "structure" in metadata.columns else "structure_name"
+    structure_column = get_structure_column(metadata)
     required_columns = {structure_column, "crop_raw", "crop_seg", "name_dict"}
     missing_columns = required_columns.difference(metadata.columns)
     if missing_columns:
@@ -40,13 +171,11 @@ def visualize_structures(
     missing_files: list[Path] = []
 
     for structure_name in structure_names:
-        selected = metadata.loc[
-            metadata[structure_column].astype(str) == structure_name
-        ].head(files_per_structure)
+        selected = select_structure_rows(metadata, structure_name, num_files=files_per_structure)
 
         for index, row in enumerate(selected.itertuples(index=False), start=1):
-            raw_path = input_dir / Path(row.crop_raw).name
-            mask_path = input_dir / Path(row.crop_seg).name
+            raw_path = input_dir / str(structure_name) / Path(row.crop_raw).name
+            mask_path = input_dir / str(structure_name) / Path(row.crop_seg).name
             if not raw_path.exists():
                 missing_files.append(raw_path)
             if not mask_path.exists():
@@ -72,15 +201,18 @@ def visualize_structures(
                     f"No 'struct_segmentation' channel found in name_dict for {row.crop_seg}"
                 ) from error
 
+            z_offset = 0 if (index % 3) == 0 else (index % 3) - 1
             tiff_to_png(
                 str(raw_path),
-                str(output_dir / f"{structure_name}_image_{index}.png"),
+                str(output_dir / str(structure_name) / f"{structure_name}_image_{index}.png"),
                 channel_index=structure_channel,
+                z_offset=z_offset,
             )
             tiff_to_png(
                 str(mask_path),
-                str(output_dir / f"{structure_name}_mask_{index}.png"),
+                str(output_dir / str(structure_name) / f"{structure_name}_mask_{index}.png"),
                 channel_index=structure_mask_channel,
+                z_offset=z_offset,
             )
 
     if missing_files:

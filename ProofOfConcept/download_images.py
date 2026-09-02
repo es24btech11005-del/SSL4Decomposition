@@ -11,6 +11,7 @@ PACKAGE_NAME = "aics/hipsc_single_cell_image_dataset"
 REGISTRY = "s3://allencell"
 METADATA_PATH = Path(__file__).with_name("metadata.csv")
 STRUCTURE_NAMES_PATH = Path(__file__).with_name("structure_names.txt")
+DEFAULT_OUTPUT_DIR = Path(__file__).parent / "structure_downloads"
 
 
 def load_metadata(package: q3.Package) -> pd.DataFrame:
@@ -38,22 +39,22 @@ def get_structure_names(metadata: pd.DataFrame) -> list[str]:
 def download_structures(
     structure_type: str,
     num_stacks: int,
-    output_dir: str,
+    output_dir: str | Path,
     package: q3.Package | None = None,
     metadata: pd.DataFrame | None = None,
 ):
     """
-    Download image stacks and segmentation masks for one Allen Cell structure.
+    Download up to ``num_stacks`` raw stack/segmentation pairs for one structure.
 
-    The selected files are written directly into ``output_dir`` using the file
-    names stored in the dataset's ``crop_raw`` and ``crop_seg`` columns.
+    Files are cached by structure and only downloaded when missing, which keeps
+    repeated notebook runs from re-fetching the same TIFFs.
     """
     if not structure_type:
         raise ValueError("structure_type must not be empty")
-    if num_stacks < 0:
-        raise ValueError("num_stacks must be non-negative")
+    if num_stacks < 1:
+        raise ValueError("num_stacks must be at least 1")
 
-    destination = Path(output_dir)
+    destination = Path(output_dir) / str(structure_type)
     destination.mkdir(parents=True, exist_ok=True)
 
     package = package or q3.Package.browse(PACKAGE_NAME, registry=REGISTRY)
@@ -67,11 +68,41 @@ def download_structures(
 
     selected = metadata.loc[metadata[structure_column] == structure_type].head(num_stacks)
     for row in selected.itertuples(index=False):
-        raw_path = Path(row.crop_raw)
-        seg_path = Path(row.crop_seg)
-        
-        package[str(row.crop_raw)].fetch(str(destination / row.structure_name / raw_path.name))
-        package[str(row.crop_seg)].fetch(str(destination / row.structure_name / seg_path.name))
+        raw_name = Path(row.crop_raw).name
+        seg_name = Path(row.crop_seg).name
+        raw_dest = destination / raw_name
+        seg_dest = destination / seg_name
+        if raw_dest.exists() and seg_dest.exists():
+            continue
+
+        if not raw_dest.exists():
+            package[str(row.crop_raw)].fetch(str(raw_dest))
+        if not seg_dest.exists():
+            package[str(row.crop_seg)].fetch(str(seg_dest))
+
+
+def download_structure_samples(
+    structure_names: list[str] | None = None,
+    num_stacks: int = 3,
+    output_dir: str | Path = DEFAULT_OUTPUT_DIR,
+    package: q3.Package | None = None,
+    metadata: pd.DataFrame | None = None,
+) -> list[Path]:
+    """Ensure a small number of TIFF pairs exist for each requested structure."""
+    package = package or q3.Package.browse(PACKAGE_NAME, registry=REGISTRY)
+    metadata = metadata if metadata is not None else load_metadata(package)
+    all_structures = get_structure_names(metadata)
+    requested = structure_names or all_structures
+    for structure in requested:
+        print(f"Ensuring {num_stacks} stack(s) are available for {structure}...")
+        download_structures(
+            structure,
+            num_stacks,
+            output_dir,
+            package=package,
+            metadata=metadata,
+        )
+    return [Path(output_dir) / str(structure) for structure in requested]
 
 
 if __name__ == "__main__":
@@ -84,28 +115,25 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num-stacks",
         type=int,
-        default=5,
-        help="Number of image pairs per structure (default: 5).",
+        default=3,
+        help="Number of image pairs per structure (default: 3).",
     )
     parser.add_argument(
         "--output-dir",
-        default="downloads",
-        help="Directory for downloaded files (default: downloads).",
+        default=str(DEFAULT_OUTPUT_DIR),
+        help="Directory for downloaded files (default: ProofOfConcept/structure_downloads).",
     )
     arguments = parser.parse_args()
 
     package = q3.Package.browse(PACKAGE_NAME, registry=REGISTRY)
     metadata = load_metadata(package)
-    all_structures = get_structure_names(metadata)
-    structures = arguments.structure or all_structures
-    print(f"Saved {len(all_structures)} unique structure names to {STRUCTURE_NAMES_PATH}")
+    structures = arguments.structure or get_structure_names(metadata)
+    print(f"Saved {len(structures)} unique structure names to {STRUCTURE_NAMES_PATH}")
 
-    for structure in structures:
-        print(f"Downloading {arguments.num_stacks} stack(s) for {structure}...")
-        download_structures(
-            structure,
-            arguments.num_stacks,
-            arguments.output_dir,
-            package=package,
-            metadata=metadata,
-        )
+    download_structure_samples(
+        structures,
+        arguments.num_stacks,
+        arguments.output_dir,
+        package=package,
+        metadata=metadata,
+    )

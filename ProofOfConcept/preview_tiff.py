@@ -11,15 +11,26 @@ def tiff_to_png(
     input_path: str,
     output_path: str,
     channel_index: int = 0,
+    z_offset: int | None = None,
+    z_index: int | None = None,
 ) -> None:
-    """Save the middle Z-slice of a selected TIFF channel as a PNG."""
+    """Save a representative Z-slice of a selected TIFF channel as a PNG.
+
+    When neither ``z_index`` nor ``z_offset`` is provided, the function uses the
+    exact middle slice. ``z_offset`` can be ``-1``, ``0``, or ``1`` to select the
+    middle slice or the adjacent ones.
+    """
     with tifffile.TiffFile(input_path) as tif:
         series = tif.series[0]
         axes = series.axes
         if len(series.shape) < 2 or not axes.endswith("YX"):
             raise ValueError(f"Unsupported TIFF dimensions: {series.shape} ({series.axes})")
 
-        image = series.asarray()
+        try:
+            image = series.asarray()
+        except (IndexError, RuntimeError, ValueError) as exc:
+            raise ValueError(f"Unable to read TIFF stack {input_path}: {exc}") from exc
+
         if "C" in axes:
             if not 0 <= channel_index < series.shape[axes.index("C")]:
                 raise IndexError(f"Channel index {channel_index} is out of range for {series.shape}")
@@ -31,8 +42,25 @@ def tiff_to_png(
 
         if "Z" in axes:
             z_axis = axes.index("Z")
-            middle_z = image.shape[z_axis] // 2
-            image = np.take(image, middle_z, axis=z_axis)
+            z_count = image.shape[z_axis]
+            if z_count == 0:
+                raise ValueError(f"TIFF has no Z slices: {series.shape} ({series.axes})")
+
+            middle_z = z_count // 2
+            if z_index is not None:
+                selected_z = z_index
+            elif z_offset is not None:
+                selected_z = max(0, min(z_count - 1, middle_z + int(z_offset)))
+            else:
+                selected_z = middle_z
+
+            # Clamp to valid bounds for short stacks and extreme offsets.
+            selected_z = max(0, min(z_count - 1, selected_z))
+            if not 0 <= selected_z < z_count:
+                raise IndexError(
+                    f"Z slice index {selected_z} is out of range for shape {image.shape}"
+                )
+            image = np.take(image, selected_z, axis=z_axis)
 
         if image.ndim != 2:
             raise ValueError(f"Expected a 2D image after selection, got {image.shape} ({axes})")
